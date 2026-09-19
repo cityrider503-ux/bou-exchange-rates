@@ -1,0 +1,27 @@
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Debug / scratch files
+debug_*.py
+debug_*.png
+debug_*.html
+debug_*.txt
+
+# Environment / secrets (never commit credentials!)
+.env
+*.env
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
