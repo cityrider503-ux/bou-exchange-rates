@@ -3,7 +3,7 @@ import os
 import re
 import smtplib
 import sys
-from datetime import date
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
@@ -12,100 +12,288 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 from playwright.async_api import async_playwright
 
-BOU_URL = "https://www.bou.or.ug/"
-RATES_REPORT_ID = "11d932dd-982c-421c-9abf-95bb2e4aef07"
-
-# Known currencies published by BOU
-KNOWN_CURRENCIES = {"USD", "EUR", "GBP", "KES", "TZS", "ZAR", "INR", "JPY", "CNY", "AED"}
+BOU_INTEREST_RATES_URL = "https://www.bou.or.ug/interest_rates_exchange_rates"
+MAJOR_RATES_REPORT_ID = "c76b8c30-56ec-4011-b832-5e36b91dee8a"
+COMESA_RATES_REPORT_ID = "caf1cc9c-d2af-4a28-ba99-c04fa2f230f5"
 
 
-def parse_rates(raw_text: str) -> list[dict]:
+def parse_powerbi_table(raw_text: str) -> tuple[str, list[dict]]:
     """
-    Parse the raw Power BI frame text into structured rate records.
-
-    The text arrives in this pattern (repeating for each currency):
-        CURRENCY_CODE
-        BUY_VALUE
-        SELL_VALUE
-        Buy
-        Sell
+    Parse the raw Power BI frame text into structured exchange rate records.
+    Returns (report_date, records_list).
     """
-    lines = [ln.strip() for ln in raw_text.splitlines() if ln.strip()]
+    text = raw_text.replace("\xa0", " ")
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
 
-    # Detect the rate cycle (Opening / Closing / Midday)
-    cycle = "Closing"
-    for ln in lines:
-        if ln in ("Opening", "Closing", "Midday"):
-            cycle = ln
-            break
-
-    # Detect the date line  e.g. "Today's Official Exchange Rates (18 September 2026)"
-    rate_date = date.today().strftime("%d %B %Y")
-    for ln in lines:
-        m = re.search(r"\((\d{1,2}\s+\w+\s+\d{4})\)", ln)
+    # Extract date if present (e.g. 18-Sep-2026)
+    report_date = ""
+    for l in lines:
+        m = re.search(r"(\d{1,2}[\-\s][A-Za-z]{3,9}[\-\s]\d{4})", l)
         if m:
-            rate_date = m.group(1)
+            report_date = m.group(1)
             break
+
+    ignore_lines = {
+        "Show keyboard shortcuts", "Show screen reader tips", "Skip to main content",
+        "Power BI Report", "Select Date:", "All", "Indicator:", "Major Exchange Rates",
+        "Rates for COMESA Member Countries", "Scroll up", "Scroll down", "Scroll left",
+        "Scroll right", "Currency", "Cross Rates", "Buying Rates", "Selling Rates",
+        "Buying Rate (UGX)", "Selling Rate (UGX)", "U.S. Dollar", "*Weekends have no data",
+        "*Weekends and Public Holidays have no data", "COMESA Exchange Rates", "."
+    }
+
+    # Split by '.' delimiter which Power BI uses between visual blocks
+    blocks = []
+    curr_block = []
+    for l in lines:
+        if l == ".":
+            if curr_block:
+                blocks.append(curr_block)
+                curr_block = []
+        else:
+            curr_block.append(l)
+    if curr_block:
+        blocks.append(curr_block)
+
+    def is_number(s: str) -> bool:
+        try:
+            float(s.replace(",", "").replace(" ", ""))
+            return True
+        except ValueError:
+            return False
 
     records = []
-    i = 0
-    while i < len(lines):
-        token = lines[i].strip().upper().rstrip()
-        if token in KNOWN_CURRENCIES:
-            currency = token
-            # Collect the next two numeric values (buy then sell)
-            nums = []
-            j = i + 1
-            while j < len(lines) and len(nums) < 2:
-                candidate = lines[j].replace(",", "").replace(" ", "")
-                try:
-                    nums.append(float(candidate))
-                except ValueError:
-                    pass
-                j += 1
-            if len(nums) == 2:
-                records.append(
-                    {
-                        "currency": currency,
-                        "buy": nums[0],
-                        "sell": nums[1],
-                    }
-                )
-            i = j
-        else:
-            i += 1
+    for b in blocks:
+        clean_b = [x for x in b if x not in ignore_lines]
+        if len(clean_b) >= 4:
+            currency = clean_b[0]
+            nums = clean_b[1:4]
+            if all(is_number(n) for n in nums):
+                records.append({
+                    "currency": currency,
+                    "cross_rate": nums[0],
+                    "buy_rate": nums[1],
+                    "sell_rate": nums[2]
+                })
 
-    return records, cycle, rate_date
+    return report_date, records
 
 
-def format_table(records: list[dict], cycle: str, rate_date: str) -> str:
-    """Return a nicely aligned plain-text table of exchange rates."""
-    header = f"Bank of Uganda Official Exchange Rates\n"
-    header += f"Cycle : {cycle}\n"
-    header += f"Date  : {rate_date}\n"
-    header += f"Source: https://www.bou.or.ug/\n"
-    header += "-" * 40 + "\n"
-    header += f"{'Currency':<10} {'Buy (UGX)':>12} {'Sell (UGX)':>12}\n"
-    header += "-" * 40 + "\n"
+def format_plain_text(major_data: list[dict], comesa_data: list[dict], report_date: str) -> str:
+    """Format both tables as a clean plain-text string for logs and text-fallback email."""
+    date_str = report_date if report_date else datetime.now().strftime("%d-%b-%Y")
+    
+    out = []
+    out.append("=" * 75)
+    out.append(f"BANK OF UGANDA — OFFICIAL FOREIGN EXCHANGE RATES")
+    out.append(f"Date  : {date_str}")
+    out.append(f"Source: {BOU_INTEREST_RATES_URL}")
+    out.append("=" * 75)
+    out.append("")
+    out.append("1. MAJOR FOREIGN EXCHANGE RATES")
+    out.append("-" * 75)
+    out.append(f"{'Currency / Pair':<36} {'Cross Rate':>11} {'Buy (UGX)':>12} {'Sell (UGX)':>12}")
+    out.append("-" * 75)
+    for r in major_data:
+        out.append(f"{r['currency']:<36} {r['cross_rate']:>11} {r['buy_rate']:>12} {r['sell_rate']:>12}")
+    out.append("-" * 75)
+    out.append("")
+    out.append("2. COMESA MEMBER COUNTRIES EXCHANGE RATES")
+    out.append("-" * 75)
+    out.append(f"{'Member Currency':<36} {'Rate vs USD':>11} {'Buy (UGX)':>12} {'Sell (UGX)':>12}")
+    out.append("-" * 75)
+    for r in comesa_data:
+        out.append(f"{r['currency']:<36} {r['cross_rate']:>11} {r['buy_rate']:>12} {r['sell_rate']:>12}")
+    out.append("-" * 75)
+    out.append("")
+    out.append("* Weekends and Public Holidays have no published rates.")
+    return "\n".join(out)
 
-    rows = ""
-    for r in records:
-        rows += f"{r['currency']:<10} {r['buy']:>12,.2f} {r['sell']:>12,.2f}\n"
 
-    return header + rows + "-" * 40
+def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_date: str) -> str:
+    """Generate a responsive, modern HTML email with inline CSS."""
+    date_display = report_date if report_date else datetime.now().strftime("%d %B %Y")
+
+    # Key highlight rates for the top quick-glance tiles
+    key_rates = {}
+    for r in major_data:
+        curr = r["currency"].lower()
+        if "uganda" in curr or "ugx" in curr:
+            key_rates["USD / UGX"] = (r["buy_rate"], r["sell_rate"])
+        elif "euro" in curr:
+            key_rates["EUR / UGX"] = (r["buy_rate"], r["sell_rate"])
+        elif "pound" in curr or "gbp" in curr:
+            key_rates["GBP / UGX"] = (r["buy_rate"], r["sell_rate"])
+        elif "kenya" in curr or "kes" in curr:
+            key_rates["KES / UGX"] = (r["buy_rate"], r["sell_rate"])
+
+    tiles_html = ""
+    for label, (buy, sell) in key_rates.items():
+        tiles_html += f"""
+        <td style="padding: 5px; width: 25%;">
+            <div style="background-color: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 8px; padding: 10px 6px; text-align: center;">
+                <div style="font-size: 11px; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.5px;">{label}</div>
+                <div style="font-size: 14px; font-weight: 700; color: #0F172A; margin: 4px 0 2px 0;">{buy}</div>
+                <div style="font-size: 11px; color: #94A3B8;">Sell: <span style="color: #475569; font-weight: 600;">{sell}</span></div>
+            </div>
+        </td>
+        """
+
+    def build_rows(data: list[dict]) -> str:
+        rows = ""
+        for i, r in enumerate(data):
+            bg = "#FFFFFF" if i % 2 == 0 else "#F8FAFC"
+            rows += f"""
+            <tr style="background-color: {bg};">
+                <td style="padding: 9px 12px; font-size: 13px; color: #1E293B; font-weight: 500; border-bottom: 1px solid #E2E8F0;">{r['currency']}</td>
+                <td style="padding: 9px 12px; font-size: 13px; color: #475569; text-align: right; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; border-bottom: 1px solid #E2E8F0;">{r['cross_rate']}</td>
+                <td style="padding: 9px 12px; font-size: 13px; color: #0D9488; font-weight: 600; text-align: right; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; border-bottom: 1px solid #E2E8F0;">{r['buy_rate']}</td>
+                <td style="padding: 9px 12px; font-size: 13px; color: #0284C7; font-weight: 600; text-align: right; font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace; border-bottom: 1px solid #E2E8F0;">{r['sell_rate']}</td>
+            </tr>
+            """
+        return rows
+
+    major_rows_html = build_rows(major_data)
+    comesa_rows_html = build_rows(comesa_data)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bank of Uganda Official Exchange Rates</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #F1F5F9; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; -webkit-font-smoothing: antialiased;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="background-color: #F1F5F9; padding: 25px 12px;">
+        <tr>
+            <td align="center">
+                <!-- Main Container Card -->
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 720px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04); border: 1px solid #E2E8F0;">
+                    
+                    <!-- Header Banner -->
+                    <tr>
+                        <td style="background: linear-gradient(135deg, #0A2540 0%, #173A60 100%); padding: 30px 24px; text-align: center; border-bottom: 3px solid #C5A059;">
+                            <div style="display: inline-block; padding: 4px 12px; background-color: rgba(197, 160, 89, 0.2); border: 1px solid #C5A059; border-radius: 20px; color: #E5C378; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px;">
+                                Central Bank of Uganda
+                            </div>
+                            <h1 style="margin: 0; color: #FFFFFF; font-size: 23px; font-weight: 800; letter-spacing: -0.5px;">
+                                Official Foreign Exchange Rates
+                            </h1>
+                            <p style="margin: 8px 0 0 0; color: #94A3B8; font-size: 14px;">
+                                Daily Market Rates &bull; <strong style="color: #F1F5F9;">{date_display}</strong>
+                            </p>
+                        </td>
+                    </tr>
+
+                    <!-- Key Indicators Highlight Strip -->
+                    <tr>
+                        <td style="padding: 20px 20px 6px 20px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
+                                <tr>
+                                    {tiles_html}
+                                </tr>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Section 1: Major Exchange Rates -->
+                    <tr>
+                        <td style="padding: 16px 20px 24px 20px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
+                                <tr>
+                                    <td align="left">
+                                        <h2 style="margin: 0; color: #0F172A; font-size: 16px; font-weight: 700;">
+                                            1. Major Foreign Exchange Rates
+                                        </h2>
+                                        <div style="font-size: 12px; color: #64748B; margin-top: 2px;">Cross Rates, Official Buying &amp; Selling Quotes (UGX)</div>
+                                    </td>
+                                    <td align="right" valign="top">
+                                        <span style="background-color: #E2E8F0; color: #334155; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px;">{len(major_data)} Pairs</span>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0;">
+                                <thead>
+                                    <tr style="background-color: #0A2540; color: #FFFFFF;">
+                                        <th style="padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Currency / Pair</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Cross Rate</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Buy (UGX)</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Sell (UGX)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {major_rows_html}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Section 2: COMESA Member Countries -->
+                    <tr>
+                        <td style="padding: 0 20px 24px 20px;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
+                                <tr>
+                                    <td align="left">
+                                        <h2 style="margin: 0; color: #0F172A; font-size: 16px; font-weight: 700;">
+                                            2. COMESA Member Countries Exchange Rates
+                                        </h2>
+                                        <div style="font-size: 12px; color: #64748B; margin-top: 2px;">Regional Currencies against U.S. Dollar &amp; Uganda Shilling</div>
+                                    </td>
+                                    <td align="right" valign="top">
+                                        <span style="background-color: #E2E8F0; color: #334155; font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 12px;">{len(comesa_data)} Members</span>
+                                    </td>
+                                </tr>
+                            </table>
+
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0;">
+                                <thead>
+                                    <tr style="background-color: #0A2540; color: #FFFFFF;">
+                                        <th style="padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Member Currency</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Rate vs USD</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Buy (UGX)</th>
+                                        <th style="padding: 10px 12px; text-align: right; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Sell (UGX)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {comesa_rows_html}
+                                </tbody>
+                            </table>
+                        </td>
+                    </tr>
+
+                    <!-- Footer Note & Source -->
+                    <tr>
+                        <td style="background-color: #F8FAFC; padding: 20px; border-top: 1px solid #E2E8F0; text-align: center;">
+                            <p style="margin: 0 0 6px 0; font-size: 12px; color: #64748B; line-height: 1.5;">
+                                Source: <a href="{BOU_INTEREST_RATES_URL}" target="_blank" style="color: #0284C7; text-decoration: underline; font-weight: 600;">Bank of Uganda Financial Markets Portal</a>
+                            </p>
+                            <p style="margin: 0; font-size: 11px; color: #94A3B8; line-height: 1.5;">
+                                * Weekends and Public Holidays have no published rates. Rates are indicative and subject to change.<br>
+                                Automated notification powered by BOU Exchange Rate Monitor.
+                            </p>
+                        </td>
+                    </tr>
+
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>
+"""
+    return html
 
 
-async def fetch_bou_exchange_rates() -> tuple[str, list[dict], str, str]:
+async def fetch_both_tables() -> tuple[list[dict], list[dict], str]:
     """
-    Load the BOU homepage in a headless browser, locate the Power BI
-    exchange-rates iframe, and extract structured rate data.
-
-    Returns (formatted_table, records, cycle, rate_date).
+    Scrape both Major Exchange Rates and COMESA Member Rates from
+    https://www.bou.or.ug/interest_rates_exchange_rates using Playwright.
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
-            viewport={"width": 1440, "height": 900},
+            viewport={"width": 1440, "height": 1000},
             user_agent=(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -114,83 +302,109 @@ async def fetch_bou_exchange_rates() -> tuple[str, list[dict], str, str]:
         )
         page = await context.new_page()
 
-        print("Loading Bank of Uganda homepage...")
-        await page.goto(BOU_URL, wait_until="domcontentloaded", timeout=60_000)
+        print(f"Loading {BOU_INTEREST_RATES_URL}...")
+        await page.goto(BOU_INTEREST_RATES_URL, wait_until="domcontentloaded", timeout=60_000)
 
-        # Poll for the exchange-rates iframe frame to appear (up to 60 s)
-        rates_frame = None
-        print("Waiting for Power BI exchange-rates frame...", end="", flush=True)
+        # 1. Fetch Major Rates
+        print("Waiting for Major Rates frame...")
+        major_frame = None
         for _ in range(30):
             await asyncio.sleep(2)
-            for frame in page.frames:
-                if RATES_REPORT_ID in frame.url:
-                    rates_frame = frame
+            for f in page.frames:
+                if MAJOR_RATES_REPORT_ID in f.url:
+                    major_frame = f
                     break
-            if rates_frame:
+            if major_frame:
                 break
-            print(".", end="", flush=True)
-        print()
 
-        if not rates_frame:
-            await browser.close()
-            return "ERROR: Could not locate the exchange rates iframe.", [], "N/A", "N/A"
+        if not major_frame:
+            raise RuntimeError("Could not find Major Rates Power BI iframe.")
 
-        # Wait for at least one known currency to appear as text
-        print("Waiting for rate data to render...")
-        for attempt in range(20):  # up to 40 s
+        print("Waiting for Major Rates data to render...")
+        major_text = ""
+        for _ in range(25):
             await asyncio.sleep(2)
-            text = await rates_frame.inner_text("body")
-            if any(curr in text.upper() for curr in KNOWN_CURRENCIES):
-                print(f"Data ready after ~{(attempt + 1) * 2}s")
+            txt = await major_frame.inner_text("body")
+            if any(k in txt for k in ["Australian Dollar", "Euro", "U.S. Dollar"]):
+                major_text = txt
+                print("Major Rates data ready!")
                 break
         else:
-            print("Warning: timed out waiting; using whatever is available.")
+            major_text = await major_frame.inner_text("body")
 
-        raw_text = await rates_frame.inner_text("body")
+        major_date, major_data = parse_powerbi_table(major_text)
+        print(f"Extracted {len(major_data)} Major Currency pairs (Date: {major_date}).")
+
+        # 2. Fetch COMESA Rates
+        print("Clicking 'COMESA Members' tab...")
+        comesa_btn = await page.query_selector("text='COMESA Members'")
+        if not comesa_btn:
+            raise RuntimeError("Could not find 'COMESA Members' tab button.")
+
+        await comesa_btn.click()
+
+        print("Waiting for COMESA frame...")
+        comesa_frame = None
+        for _ in range(30):
+            await asyncio.sleep(2)
+            for f in page.frames:
+                if COMESA_RATES_REPORT_ID in f.url:
+                    comesa_frame = f
+                    break
+            if comesa_frame:
+                break
+
+        if not comesa_frame:
+            raise RuntimeError("Could not find COMESA Rates Power BI iframe.")
+
+        print("Waiting for COMESA data to render...")
+        comesa_text = ""
+        for _ in range(25):
+            await asyncio.sleep(2)
+            txt = await comesa_frame.inner_text("body")
+            if any(k in txt for k in ["Burundi Francs", "Kenya Shillings", "Tanzania Shillings"]):
+                comesa_text = txt
+                print("COMESA Rates data ready!")
+                break
+        else:
+            comesa_text = await comesa_frame.inner_text("body")
+
+        comesa_date, comesa_data = parse_powerbi_table(comesa_text)
+        print(f"Extracted {len(comesa_data)} COMESA Currencies (Date: {comesa_date}).")
+
         await browser.close()
 
-    records, cycle, rate_date = parse_rates(raw_text)
-    if not records:
-        return (
-            "Unable to parse exchange rate data from the Power BI frame.\n"
-            f"Raw text received:\n{raw_text}",
-            [],
-            "N/A",
-            "N/A",
-        )
-
-    table = format_table(records, cycle, rate_date)
-    return table, records, cycle, rate_date
+    report_date = major_date or comesa_date
+    return major_data, comesa_data, report_date
 
 
-def send_email(table: str, recipient_email: str, rate_date: str):
-    """Send the formatted exchange-rate table via Gmail SMTP."""
+def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str, recipient_email: str):
+    """Send both plain-text and HTML email with inline CSS styles via Gmail SMTP."""
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
     sender_email = os.getenv("SENDER_EMAIL")
-    sender_password = os.getenv("SENDER_PASSWORD")  # Use a Gmail App Password
+    sender_password = os.getenv("SENDER_PASSWORD")
 
     if not sender_email or not sender_password:
         print(
-            "\nEmail not sent — set SENDER_EMAIL and SENDER_PASSWORD "
-            "environment variables first.\n"
-            "  $env:SENDER_EMAIL    = 'you@gmail.com'\n"
+            "\nEmail not sent — set SENDER_EMAIL and SENDER_PASSWORD environment variables:\n"
+            "  $env:SENDER_EMAIL    = 'your_email@gmail.com'\n"
             "  $env:SENDER_PASSWORD = 'your-app-password'"
         )
         return
 
-    msg = MIMEMultipart()
+    plain_text = format_plain_text(major_data, comesa_data, report_date)
+    html_content = generate_email_html(major_data, comesa_data, report_date)
+
+    msg = MIMEMultipart("alternative")
     msg["From"] = sender_email
     msg["To"] = recipient_email
-    msg["Subject"] = f"BOU Official Exchange Rates — {rate_date}"
+    subject_date = report_date if report_date else datetime.now().strftime("%d %B %Y")
+    msg["Subject"] = f"Official Bank of Uganda Exchange Rates — {subject_date}"
 
-    body = (
-        f"Hello,\n\n"
-        f"Here are the latest official exchange rates from the Bank of Uganda:\n\n"
-        f"{table}\n\n"
-        f"This is an automated message.\n"
-    )
-    msg.attach(MIMEText(body, "plain"))
+    # Attach both parts (text first as fallback, HTML second as primary)
+    msg.attach(MIMEText(plain_text, "plain", "utf-8"))
+    msg.attach(MIMEText(html_content, "html", "utf-8"))
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
@@ -204,13 +418,13 @@ def send_email(table: str, recipient_email: str, rate_date: str):
 
 
 if __name__ == "__main__":
-    RECIPIENT = "cityrider503@gmail.com"
+    RECIPIENT = os.getenv("RECIPIENT_EMAIL", "cityrider503@gmail.com")
 
-    table, records, cycle, rate_date = asyncio.run(fetch_bou_exchange_rates())
+    print("\n--- Scraping Bank of Uganda Exchange Rates ---")
+    major_data, comesa_data, report_date = asyncio.run(fetch_both_tables())
 
-    print("\n" + "=" * 40)
-    print(table)
-    print("=" * 40 + "\n")
+    plain_text_summary = format_plain_text(major_data, comesa_data, report_date)
+    print("\n" + plain_text_summary + "\n")
 
-    if records:
-        send_email(table, RECIPIENT, rate_date)
+    if major_data or comesa_data:
+        send_email(major_data, comesa_data, report_date, RECIPIENT)
