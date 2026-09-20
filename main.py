@@ -168,12 +168,10 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
         <tr>
             <td align="center">
                 <!-- Main Container Card -->
-                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 720px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.08), 0 2px 4px -2px rgba(0, 0, 0, 0.04); border: 1px solid #E2E8F0;">
-                    
-                    <!-- Header Banner -->
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="max-width: 720px; background-color: #FFFFFF; border-radius: 12px; overflow: hidden; box-shadow: 0 12px 36px rgba(15, 23, 42, 0.08);">
                     <tr>
                         <td style="background: linear-gradient(135deg, #0A2540 0%, #173A60 100%); padding: 30px 24px; text-align: center; border-bottom: 3px solid #C5A059;">
-                            <div style="display: inline-block; padding: 4px 12px; background-color: rgba(197, 160, 89, 0.2); border: 1px solid #C5A059; border-radius: 20px; color: #E5C378; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.2px; margin-bottom: 10px;">
+                            <div style="display: inline-block; padding: 4px 12px; background-color: rgba(197, 160, 89, 0.2); border: 1px solid #C5A059; border-radius: 20px; color: #E5C378; font-size: 11px; font-weight: 700; letter-spacing: 0.8px; text-transform: uppercase;">
                                 Central Bank of Uganda
                             </div>
                             <h1 style="margin: 0; color: #FFFFFF; font-size: 23px; font-weight: 800; letter-spacing: -0.5px;">
@@ -184,8 +182,6 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                             </p>
                         </td>
                     </tr>
-
-                    <!-- Key Indicators Highlight Strip -->
                     <tr>
                         <td style="padding: 20px 20px 6px 20px;">
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0">
@@ -195,8 +191,6 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                             </table>
                         </td>
                     </tr>
-
-                    <!-- Section 1: Major Exchange Rates -->
                     <tr>
                         <td style="padding: 16px 20px 24px 20px;">
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
@@ -213,7 +207,7 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                                 </tr>
                             </table>
 
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden;">
                                 <thead>
                                     <tr style="background-color: #0A2540; color: #FFFFFF;">
                                         <th style="padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Currency / Pair</th>
@@ -229,7 +223,6 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                         </td>
                     </tr>
 
-                    <!-- Section 2: COMESA Member Countries -->
                     <tr>
                         <td style="padding: 0 20px 24px 20px;">
                             <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="margin-bottom: 12px;">
@@ -246,7 +239,7 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                                 </tr>
                             </table>
 
-                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden; border: 1px solid #E2E8F0;">
+                            <table role="presentation" width="100%" cellspacing="0" cellpadding="0" border="0" style="border-collapse: collapse; width: 100%; border-radius: 8px; overflow: hidden;">
                                 <thead>
                                     <tr style="background-color: #0A2540; color: #FFFFFF;">
                                         <th style="padding: 10px 12px; text-align: left; font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;">Member Currency</th>
@@ -262,11 +255,10 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                         </td>
                     </tr>
 
-                    <!-- Footer Note & Source -->
                     <tr>
                         <td style="background-color: #F8FAFC; padding: 20px; border-top: 1px solid #E2E8F0; text-align: center;">
                             <p style="margin: 0 0 6px 0; font-size: 12px; color: #64748B; line-height: 1.5;">
-                                Source: <a href="{BOU_INTEREST_RATES_URL}" target="_blank" style="color: #0284C7; text-decoration: underline; font-weight: 600;">Bank of Uganda Financial Markets Portal</a>
+                                Source: <a href="{BOU_INTEREST_RATES_URL}" target="_blank" style="color: #0284C7; text-decoration: underline; font-weight: 600;">Bank of Uganda Financial Markets Page</a>
                             </p>
                             <p style="margin: 0; font-size: 11px; color: #94A3B8; line-height: 1.5;">
                                 * Weekends and Public Holidays have no published rates. Rates are indicative and subject to change.<br>
@@ -274,7 +266,6 @@ def generate_email_html(major_data: list[dict], comesa_data: list[dict], report_
                             </p>
                         </td>
                     </tr>
-
                 </table>
             </td>
         </tr>
@@ -382,8 +373,9 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
     """Send both plain-text and HTML email with inline CSS styles via Gmail SMTP."""
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
-    sender_email = os.getenv("SENDER_EMAIL")
-    sender_password = os.getenv("SENDER_PASSWORD")
+    sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
+    sender_password = (os.getenv("SENDER_PASSWORD") or "").strip()
+    recipient_email = (recipient_email or "").strip()
 
     if not sender_email or not sender_password:
         print(
@@ -392,6 +384,9 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
             "  $env:SENDER_PASSWORD = 'your-app-password'"
         )
         return
+
+    if not recipient_email or "@" not in recipient_email:
+        raise ValueError(f"RECIPIENT_EMAIL is missing or invalid: {recipient_email!r}")
 
     plain_text = format_plain_text(major_data, comesa_data, report_date)
     html_content = generate_email_html(major_data, comesa_data, report_date)
@@ -410,7 +405,7 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
         server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
-        server.send_message(msg)
+        server.send_message(msg, from_addr=sender_email, to_addrs=[recipient_email])
         server.quit()
         print(f"Email sent successfully to {recipient_email}")
     except Exception as e:
@@ -418,7 +413,7 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
 
 
 if __name__ == "__main__":
-    RECIPIENT = os.getenv("RECIPIENT_EMAIL", "dylanivandarussian@gmail.com")
+    RECIPIENT = (os.getenv("RECIPIENT_EMAIL") or "").strip() or "dylanivandarussian@gmail.com"
 
     print("\n--- Scraping Bank of Uganda Exchange Rates ---")
     major_data, comesa_data, report_date = asyncio.run(fetch_both_tables())
