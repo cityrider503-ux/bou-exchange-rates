@@ -418,7 +418,7 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
 
 
 if __name__ == "__main__":
-    RECIPIENT = os.getenv("RECIPIENT_EMAIL", "cityrider503@gmail.com")
+    RECIPIENT = os.getenv("RECIPIENT_EMAIL", "dylanivandarussian@gmail.com")
 
     print("\n--- Scraping Bank of Uganda Exchange Rates ---")
     major_data, comesa_data, report_date = asyncio.run(fetch_both_tables())
