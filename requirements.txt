@@ -1,3 +1,9 @@
-requests
-beautifulsoup4
-playwright
+# Playwright is the only runtime dependency — main.py scrapes the BOU Power BI
+# embed with it. `requests` and `beautifulsoup4` were previously listed here but
+# were never imported by any module, so they were pure install-time cost in CI.
+#
+# Constrained to the 1.x line rather than pinned to an exact build: this keeps
+# installs reproducible enough for a scheduled job while still picking up
+# security patches without needing a code change. The GitHub Action does not
+# cache site-packages across runs.
+playwright>=1.49,<2.0

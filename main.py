@@ -16,6 +16,52 @@ BOU_INTEREST_RATES_URL = "https://www.bou.or.ug/interest_rates_exchange_rates"
 MAJOR_RATES_REPORT_ID = "c76b8c30-56ec-4011-b832-5e36b91dee8a"
 COMESA_RATES_REPORT_ID = "caf1cc9c-d2af-4a28-ba99-c04fa2f230f5"
 
+# Expected shape of the scraped tables. The README documents 21 major pairs and
+# 16 COMESA currencies; anything far outside that band means Power BI changed
+# its layout and the parser is quietly producing malformed rows.
+EXPECTED_MAJOR_MIN = 15
+EXPECTED_MAJOR_MAX = 40
+EXPECTED_COMESA_MIN = 10
+EXPECTED_COMESA_MAX = 30
+
+# Every record must carry these keys with a non-empty currency name.
+REQUIRED_FIELDS = ("currency", "cross_rate", "buy_rate", "sell_rate")
+
+
+class ScrapingError(RuntimeError):
+    """Raised when the BOU tables cannot be scraped or fail validation."""
+
+
+class EmailDeliveryError(RuntimeError):
+    """Raised when the rate email could not be delivered."""
+
+
+def validate_records(records: list[dict], table_name: str, minimum: int, maximum: int) -> None:
+    """
+    Fail loudly if a parsed table looks wrong.
+
+    Without this, a layout change on the BOU side produces a plausible-looking
+    but incorrect email (or an empty one) and the run still reports success.
+    """
+    count = len(records)
+    if count == 0:
+        raise ScrapingError(f"{table_name}: no records parsed from the BOU table.")
+
+    if not (minimum <= count <= maximum):
+        raise ScrapingError(
+            f"{table_name}: parsed {count} records, expected between {minimum} and {maximum}. "
+            "The BOU page layout has probably changed — check parse_powerbi_table()."
+        )
+
+    for record in records:
+        missing = [f for f in REQUIRED_FIELDS if f not in record or not str(record[f]).strip()]
+        if missing:
+            raise ScrapingError(
+                f"{table_name}: record is missing required field(s) {missing}: {record!r}"
+            )
+
+    print(f"Validated {count} {table_name} records.")
+
 
 def parse_powerbi_table(raw_text: str) -> tuple[str, list[dict]]:
     """
@@ -62,6 +108,12 @@ def parse_powerbi_table(raw_text: str) -> tuple[str, list[dict]]:
         except ValueError:
             return False
 
+    def is_positive_number(s: str) -> bool:
+        try:
+            return float(s.replace(",", "").replace(" ", "")) > 0
+        except ValueError:
+            return False
+
     records = []
     for b in blocks:
         clean_b = [x for x in b if x not in ignore_lines]
@@ -69,12 +121,19 @@ def parse_powerbi_table(raw_text: str) -> tuple[str, list[dict]]:
             currency = clean_b[0]
             nums = clean_b[1:4]
             if all(is_number(n) for n in nums):
-                records.append({
-                    "currency": currency,
-                    "cross_rate": nums[0],
-                    "buy_rate": nums[1],
-                    "sell_rate": nums[2]
-                })
+                # Guard against mis-aligned rows: a real quote always has a
+                # positive buying and selling rate, and a currency-style name.
+                sell_is_valid = is_positive_number(nums[2])
+                currency_is_valid = len(currency) <= 60 and not currency.endswith(":")
+                if sell_is_valid and currency_is_valid:
+                    records.append({
+                        "currency": currency,
+                        "cross_rate": nums[0],
+                        "buy_rate": nums[1],
+                        "sell_rate": nums[2]
+                    })
+                else:
+                    print(f"  Skipped suspicious row: {clean_b[:4]}")
 
     return report_date, records
 
@@ -280,113 +339,161 @@ async def fetch_both_tables() -> tuple[list[dict], list[dict], str]:
     """
     Scrape both Major Exchange Rates and COMESA Member Rates from
     https://www.bou.or.ug/interest_rates_exchange_rates using Playwright.
+
+    Returns ([], [], "") when the bank published no rates at all (public
+    holiday). Raises ScrapingError if a table is missing or fails validation,
+    so a broken scrape never reaches the email step.
     """
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            viewport={"width": 1440, "height": 1000},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ),
-        )
-        page = await context.new_page()
+        # `async with` guarantees Chromium is torn down even when scraping
+        # raises, instead of leaking a headless browser process.
+        async with p.chromium.launch(headless=True) as browser:
+            context = await browser.new_context(
+                viewport={"width": 1440, "height": 1000},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+            )
+            page = await context.new_page()
 
-        print(f"Loading {BOU_INTEREST_RATES_URL}...")
-        await page.goto(BOU_INTEREST_RATES_URL, wait_until="domcontentloaded", timeout=60_000)
+            print(f"Loading {BOU_INTEREST_RATES_URL}...")
+            await page.goto(BOU_INTEREST_RATES_URL, wait_until="domcontentloaded", timeout=60_000)
 
-        # 1. Fetch Major Rates
-        print("Waiting for Major Rates frame...")
-        major_frame = None
-        for _ in range(30):
-            await asyncio.sleep(2)
-            for f in page.frames:
-                if MAJOR_RATES_REPORT_ID in f.url:
-                    major_frame = f
+            # 1. Fetch Major Rates
+            print("Waiting for Major Rates frame...")
+            major_frame = None
+            for _ in range(30):
+                await asyncio.sleep(2)
+                for f in page.frames:
+                    if MAJOR_RATES_REPORT_ID in f.url:
+                        major_frame = f
+                        break
+                if major_frame:
                     break
-            if major_frame:
-                break
 
-        if not major_frame:
-            raise RuntimeError("Could not find Major Rates Power BI iframe.")
+            if not major_frame:
+                raise ScrapingError("Could not find Major Rates Power BI iframe.")
 
-        print("Waiting for Major Rates data to render...")
-        major_text = ""
-        for _ in range(25):
-            await asyncio.sleep(2)
-            txt = await major_frame.inner_text("body")
-            if any(k in txt for k in ["Australian Dollar", "Euro", "U.S. Dollar"]):
-                major_text = txt
-                print("Major Rates data ready!")
-                break
-        else:
-            major_text = await major_frame.inner_text("body")
-
-        major_date, major_data = parse_powerbi_table(major_text)
-        print(f"Extracted {len(major_data)} Major Currency pairs (Date: {major_date}).")
-
-        # 2. Fetch COMESA Rates
-        print("Clicking 'COMESA Members' tab...")
-        comesa_btn = await page.query_selector("text='COMESA Members'")
-        if not comesa_btn:
-            raise RuntimeError("Could not find 'COMESA Members' tab button.")
-
-        await comesa_btn.click()
-
-        print("Waiting for COMESA frame...")
-        comesa_frame = None
-        for _ in range(30):
-            await asyncio.sleep(2)
-            for f in page.frames:
-                if COMESA_RATES_REPORT_ID in f.url:
-                    comesa_frame = f
+            print("Waiting for Major Rates data to render...")
+            major_text = ""
+            for _ in range(25):
+                await asyncio.sleep(2)
+                txt = await major_frame.inner_text("body")
+                if any(k in txt for k in ["Australian Dollar", "Euro", "U.S. Dollar"]):
+                    major_text = txt
+                    print("Major Rates data ready!")
                     break
-            if comesa_frame:
-                break
+            else:
+                major_text = await major_frame.inner_text("body")
 
-        if not comesa_frame:
-            raise RuntimeError("Could not find COMESA Rates Power BI iframe.")
+            major_date, major_data = parse_powerbi_table(major_text)
+            print(f"Extracted {len(major_data)} Major Currency pairs (Date: {major_date}).")
 
-        print("Waiting for COMESA data to render...")
-        comesa_text = ""
-        for _ in range(25):
-            await asyncio.sleep(2)
-            txt = await comesa_frame.inner_text("body")
-            if any(k in txt for k in ["Burundi Francs", "Kenya Shillings", "Tanzania Shillings"]):
-                comesa_text = txt
-                print("COMESA Rates data ready!")
-                break
-        else:
-            comesa_text = await comesa_frame.inner_text("body")
+            # 2. Fetch COMESA Rates
+            print("Clicking 'COMESA Members' tab...")
+            comesa_btn = await page.query_selector("text='COMESA Members'")
+            if not comesa_btn:
+                raise ScrapingError("Could not find 'COMESA Members' tab button.")
 
-        comesa_date, comesa_data = parse_powerbi_table(comesa_text)
-        print(f"Extracted {len(comesa_data)} COMESA Currencies (Date: {comesa_date}).")
+            await comesa_btn.click()
 
-        await browser.close()
+            print("Waiting for COMESA frame...")
+            comesa_frame = None
+            for _ in range(30):
+                await asyncio.sleep(2)
+                for f in page.frames:
+                    if COMESA_RATES_REPORT_ID in f.url:
+                        comesa_frame = f
+                        break
+                if comesa_frame:
+                    break
+
+            if not comesa_frame:
+                raise ScrapingError("Could not find COMESA Rates Power BI iframe.")
+
+            print("Waiting for COMESA data to render...")
+            comesa_text = ""
+            for _ in range(25):
+                await asyncio.sleep(2)
+                txt = await comesa_frame.inner_text("body")
+                if any(k in txt for k in ["Burundi Francs", "Kenya Shillings", "Tanzania Shillings"]):
+                    comesa_text = txt
+                    print("COMESA Rates data ready!")
+                    break
+            else:
+                comesa_text = await comesa_frame.inner_text("body")
+
+            comesa_date, comesa_data = parse_powerbi_table(comesa_text)
+            print(f"Extracted {len(comesa_data)} COMESA Currencies (Date: {comesa_date}).")
+
+            # A public holiday publishes nothing on either table. That is an
+            # expected outcome, not a failure — bail out before validating.
+            if not major_data and not comesa_data:
+                print("No rates published on either table (public holiday). Nothing to send.")
+                return [], [], ""
+
+            validate_records(major_data, "Major rates", EXPECTED_MAJOR_MIN, EXPECTED_MAJOR_MAX)
+            validate_records(comesa_data, "COMESA rates", EXPECTED_COMESA_MIN, EXPECTED_COMESA_MAX)
 
     report_date = major_date or comesa_date
     return major_data, comesa_data, report_date
 
 
+def load_config() -> tuple[str, str, str]:
+    """
+    Read and validate credentials from the environment.
+
+    Raises EmailDeliveryError listing every problem at once, so a run that is
+    going to fail says so up front instead of reporting success.
+    """
+    sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
+    sender_password = (os.getenv("SENDER_PASSWORD") or "").strip()
+    recipient_email = (os.getenv("RECIPIENT_EMAIL") or "").strip()
+
+    problems = []
+    if not sender_email:
+        problems.append("SENDER_EMAIL is not set")
+    if not sender_password:
+        problems.append("SENDER_PASSWORD is not set")
+    if not recipient_email:
+        problems.append(
+            "RECIPIENT_EMAIL is not set (there is no built-in default — "
+            "set it as a repository secret)"
+        )
+    elif "@" not in recipient_email:
+        problems.append(f"RECIPIENT_EMAIL is not a valid address: {recipient_email!r}")
+
+    if problems:
+        raise EmailDeliveryError(
+            "Missing or invalid email configuration:\n  - "
+            + "\n  - ".join(problems)
+            + "\n\nSet SENDER_EMAIL, SENDER_PASSWORD and RECIPIENT_EMAIL. "
+            "SENDER_PASSWORD must be a Google App Password, not your account password."
+        )
+
+    return sender_email, sender_password, recipient_email
+
+
 def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str, recipient_email: str):
-    """Send both plain-text and HTML email with inline CSS styles via Gmail SMTP."""
+    """
+    Send both plain-text and HTML email with inline CSS styles via Gmail SMTP.
+
+    Raises EmailDeliveryError on any failure — a dropped SMTP connection must
+    fail the workflow rather than report a green run.
+    """
     smtp_server = "smtp.gmail.com"
     smtp_port = 587
     sender_email = (os.getenv("SENDER_EMAIL") or "").strip()
     sender_password = (os.getenv("SENDER_PASSWORD") or "").strip()
     recipient_email = (recipient_email or "").strip()
 
-    if not sender_email or not sender_password:
-        print(
-            "\nEmail not sent — set SENDER_EMAIL and SENDER_PASSWORD environment variables:\n"
-            "  $env:SENDER_EMAIL    = 'your_email@gmail.com'\n"
-            "  $env:SENDER_PASSWORD = 'your-app-password'"
+    if not sender_email or not sender_password or not recipient_email:
+        raise EmailDeliveryError(
+            "Email not sent — SENDER_EMAIL, SENDER_PASSWORD and RECIPIENT_EMAIL "
+            "must all be set."
         )
-        return
-
-    if not recipient_email or "@" not in recipient_email:
-        raise ValueError(f"RECIPIENT_EMAIL is missing or invalid: {recipient_email!r}")
 
     plain_text = format_plain_text(major_data, comesa_data, report_date)
     html_content = generate_email_html(major_data, comesa_data, report_date)
@@ -401,25 +508,62 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
     msg.attach(MIMEText(plain_text, "plain", "utf-8"))
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
+    server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
     try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
         server.starttls()
         server.login(sender_email, sender_password)
         server.send_message(msg, from_addr=sender_email, to_addrs=[recipient_email])
-        server.quit()
-        print(f"Email sent successfully to {recipient_email}")
-    except Exception as e:
-        print(f"Failed to send email: {e}")
+    except smtplib.SMTPException as exc:
+        # Raising here is the whole point: the workflow must go red instead of
+        # quietly "succeeding" on a day the email never left the machine.
+        raise EmailDeliveryError(
+            f"Failed to send rates email to {recipient_email}: {exc}"
+        ) from exc
+    finally:
+        try:
+            server.quit()
+        except smtplib.SMTPException:
+            pass
+
+    print(f"Email sent successfully to {recipient_email}")
+
+
+def main() -> int:
+    """
+    Entry point. Returns a process exit code:
+      0 - rates sent, or no rates published (public holiday)
+      1 - configuration, scraping or email delivery failed
+    """
+    print("\n--- Scraping Bank of Uganda Exchange Rates ---")
+
+    try:
+        # Validate config up front — no point spending a minute scraping if
+        # the email cannot be delivered afterwards.
+        _, _, recipient_email = load_config()
+        major_data, comesa_data, report_date = asyncio.run(fetch_both_tables())
+    except (EmailDeliveryError, ScrapingError) as exc:
+        print(f"\nFAILED: {exc}")
+        return 1
+    except Exception as exc:  # noqa: BLE001 - never let a crash look like success
+        print(f"\nUNEXPECTED ERROR: {exc!r}")
+        return 1
+
+    # Weekend / public holiday: the bank publishes nothing, so there is no
+    # email to send. This is a normal outcome and exits 0.
+    if not major_data and not comesa_data:
+        print("\nNo rates published today (weekend or public holiday) — no email sent.")
+        return 0
+
+    print("\n" + format_plain_text(major_data, comesa_data, report_date) + "\n")
+
+    try:
+        send_email(major_data, comesa_data, report_date, recipient_email)
+    except EmailDeliveryError as exc:
+        print(f"\nEMAIL FAILED: {exc}")
+        return 1
+
+    return 0
 
 
 if __name__ == "__main__":
-    RECIPIENT = (os.getenv("RECIPIENT_EMAIL") or "").strip() or "dylanivandarussian@gmail.com"
-
-    print("\n--- Scraping Bank of Uganda Exchange Rates ---")
-    major_data, comesa_data, report_date = asyncio.run(fetch_both_tables())
-
-    plain_text_summary = format_plain_text(major_data, comesa_data, report_date)
-    print("\n" + plain_text_summary + "\n")
-
-    if major_data or comesa_data:
-        send_email(major_data, comesa_data, report_date, RECIPIENT)
+    sys.exit(main())

@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Prevent a manual dispatch from overlapping the scheduled run and mailing the
+# same rates twice.
+concurrency:
+  group: send-rates
+  cancel-in-progress: false
+
 jobs:
   send-rates:
     runs-on: ubuntu-latest
