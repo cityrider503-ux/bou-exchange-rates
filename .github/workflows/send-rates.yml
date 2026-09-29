@@ -2,6 +2,11 @@ name: Send BOU exchange rates
 
 on:
   schedule:
+    # 04:30 UTC Mon-Fri = 07:30 EAT (UTC+3, no daylight saving in Uganda).
+    # GitHub Actions cron is always UTC and has no timezone option, so the
+    # +3 offset is baked in here. If this ever needs to run for a different
+    # local time, convert first: EAT 07:30 -> 30 4. Do not "correct" the hour
+    # to 7 by mistake.
     - cron: "30 4 * * 1-5"
   workflow_dispatch:
 
