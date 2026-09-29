@@ -345,9 +345,10 @@ async def fetch_both_tables() -> tuple[list[dict], list[dict], str]:
     so a broken scrape never reaches the email step.
     """
     async with async_playwright() as p:
-        # `async with` guarantees Chromium is torn down even when scraping
-        # raises, instead of leaking a headless browser process.
-        async with p.chromium.launch(headless=True) as browser:
+        browser = await p.chromium.launch(headless=True)
+        # `launch()` is a coroutine, not an async context manager, so teardown
+        # is handled explicitly to avoid leaking a headless browser process.
+        try:
             context = await browser.new_context(
                 viewport={"width": 1440, "height": 1000},
                 user_agent=(
@@ -436,6 +437,8 @@ async def fetch_both_tables() -> tuple[list[dict], list[dict], str]:
 
             validate_records(major_data, "Major rates", EXPECTED_MAJOR_MIN, EXPECTED_MAJOR_MAX)
             validate_records(comesa_data, "COMESA rates", EXPECTED_COMESA_MIN, EXPECTED_COMESA_MAX)
+        finally:
+            await browser.close()
 
     report_date = major_date or comesa_date
     return major_data, comesa_data, report_date
@@ -508,22 +511,27 @@ def send_email(major_data: list[dict], comesa_data: list[dict], report_date: str
     msg.attach(MIMEText(plain_text, "plain", "utf-8"))
     msg.attach(MIMEText(html_content, "html", "utf-8"))
 
-    server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+    # smtplib.SMTP() itself raises OSError/ConnectionRefusedError rather than an
+    # SMTPException when the host is unreachable, so both are caught here and
+    # it is constructed inside the try. A network failure must fail the run too.
+    server: smtplib.SMTP | None = None
     try:
+        server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
         server.starttls()
         server.login(sender_email, sender_password)
         server.send_message(msg, from_addr=sender_email, to_addrs=[recipient_email])
-    except smtplib.SMTPException as exc:
+    except (smtplib.SMTPException, OSError) as exc:
         # Raising here is the whole point: the workflow must go red instead of
         # quietly "succeeding" on a day the email never left the machine.
         raise EmailDeliveryError(
-            f"Failed to send rates email to {recipient_email}: {exc}"
+            f"Failed to send rates email to {recipient_email}: {type(exc).__name__}: {exc}"
         ) from exc
     finally:
-        try:
-            server.quit()
-        except smtplib.SMTPException:
-            pass
+        if server is not None:
+            try:
+                server.quit()
+            except (smtplib.SMTPException, OSError):
+                pass
 
     print(f"Email sent successfully to {recipient_email}")
 
