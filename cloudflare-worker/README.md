@@ -1,0 +1,99 @@
+# Cloudflare Worker: BOU rate dispatch
+
+A tiny Cloudflare Worker that fires the
+[`send-rates.yml`](../.github/workflows/send-rates.yml) GitHub Actions
+workflow at **07:30 EAT every weekday**, replacing the unreliable
+`cron:` trigger in that same file.
+
+## Why
+
+GitHub Actions schedules are best-effort. Measured delays on this repo
+(free tier) ranged from **2h55m to 6h19m** — a 07:30 EAT schedule
+actually executed at 13:49 EAT. That misses an 08:00 deadline.
+
+Cloudflare Workers cron fires reliably to the minute. The Worker only
+*sends the signal*; the scraping and emailing still happen in GitHub
+Actions, so the existing repository secrets are used unchanged and no
+new secret is introduced into the scrape path.
+
+Measured job duration: the scrape takes ~75s, the full Actions job ~3
+minutes. So a 07:30 dispatch puts the email in the inbox around 07:33.
+
+## Setup
+
+**1. Create a fine-grained personal access token**
+
+GitHub → Settings → Developer settings → Personal access tokens →
+Fine-grained tokens → Generate new token.
+
+- **Resource owner:** `cityrider503-ux`
+- **Repository access:** Only select repositories → `bou-exchange-rates`
+- **Permissions:** `Actions` → **Read and write**
+- Nothing else. This token can trigger workflows on this one repo and
+  do nothing else.
+
+**2. Install Wrangler and authenticate**
+
+```bash
+npm install -g wrangler
+wrangler login
+```
+
+**3. Store the token as a secret**
+
+```bash
+wrangler secret put GH_TOKEN
+```
+
+Paste the token when prompted. It is stored encrypted and never written
+to disk or committed. Confirm it is not in `git status`.
+
+**4. Deploy**
+
+```bash
+wrangler deploy
+```
+
+## Verify
+
+```bash
+# Fires the Worker immediately, without waiting for the schedule
+wrangler dev --remote
+# then, in another shell:
+curl "http://localhost:8787/cdn-cgi/local/scheduled"
+```
+
+Or check the real schedule: **Workers & Pages** → your Worker →
+**Settings** → **Triggers** → **View events**. The last 100 invocations
+are logged there, and a `Dispatch accepted (204)` line means it worked.
+
+Watch for the resulting run under the repository's **Actions** tab.
+
+## After the fix branch merges
+
+Change `REF` in `src/index.js` from
+`fix/silent-failures-and-validation` to `main`, then redeploy. A GitHub
+workflow can only be dispatched on a branch where the workflow file
+itself exists, so the ref must be a real branch — not a commit SHA.
+
+## Free plan limits
+
+Confirmed against Cloudflare's limits documentation:
+
+| Limit | Free plan | This Worker uses |
+| --- | --- | --- |
+| Cron triggers per account | 5 | 1 |
+| Requests per day | 100,000 | ~5 |
+| CPU per cron trigger | 10 ms | ~2 ms (one `fetch`) |
+| Wall time per cron trigger | 15 min | <1 s |
+
+The Worker also treats GitHub's `409` (a run already queued) as success,
+so a duplicate dispatch is harmless — the `concurrency` group in
+`send-rates.yml` prevents a second email.
+
+## Security note
+
+`GH_TOKEN` is a real credential that can run workflows in this repository.
+Scope it to this single repository and to `Actions: write` only, as
+described above. If the token leaks, revoke it at
+GitHub → Settings → Developer settings → Personal access tokens.
