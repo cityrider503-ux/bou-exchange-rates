@@ -21,8 +21,13 @@
 const REPO = "cityrider503-ux/bou-exchange-rates";
 const WORKFLOW = "send-rates.yml";
 
-/** Branch to dispatch. Change to "main" once the fix branch is merged. */
-const REF = "fix/silent-failures-and-validation";
+/**
+ * Branch to dispatch. The reliability fixes are merged, so this targets main.
+ *
+ * workflow_dispatch only works on a branch that actually contains the
+ * workflow file, so this must stay a real branch name rather than a SHA.
+ */
+const REF = "main";
 
 export default {
 	async scheduled(controller, env, ctx) {

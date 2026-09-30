@@ -69,12 +69,14 @@ are logged there, and a `Dispatch accepted (204)` line means it worked.
 
 Watch for the resulting run under the repository's **Actions** tab.
 
-## After the fix branch merges
+## Branch targeted
 
-Change `REF` in `src/index.js` from
-`fix/silent-failures-and-validation` to `main`, then redeploy. A GitHub
-workflow can only be dispatched on a branch where the workflow file
-itself exists, so the ref must be a real branch — not a commit SHA.
+`REF` in `src/index.js` is set to `main`. It was `fix/silent-failures-and-validation`
+until that branch was merged (PR #1).
+
+A GitHub workflow can only be dispatched on a branch where the workflow file
+itself exists, so `REF` must be a real branch name, not a commit SHA. If you
+ever dispatch from a different branch, update `REF` and redeploy.
 
 ## Free plan limits
 
