@@ -8,6 +8,7 @@ A Python automation tool that scrapes the **official foreign exchange rates** fr
   1. **Major Foreign Exchange Rates** (21 currency pairs including USD, EUR, GBP, KES, Gold XAU, SDR, JPY, CAD, CNY, and more).
   2. **COMESA Member Countries Exchange Rates** (16 regional currencies including Kenya, Tanzania, Rwanda, Burundi, South Africa, Malawi, and more).
 - **Power BI Headless Extraction**: Uses Playwright to render and interact with the dynamic Power BI embedded reports on the BOU website.
+- **Fail-Fast Validation**: Credentials are checked before scraping, and both tables are range- and structure-checked afterwards, so a layout change on the BOU side fails the run loudly instead of emailing bad or empty data. See [Failure Behaviour](#failure-behaviour).
 - **Executive HTML Email Design**:
   - Deep navy brand styling (`#0A2540`) with gold accent line (`#C5A059`).
   - Key Currency Highlight cards (USD/UGX, EUR/UGX, GBP/UGX, KES/UGX).
@@ -75,15 +76,51 @@ playwright install chromium
 
 ## Running the Script
 
-Set your Gmail credentials as environment variables:
+Set your Gmail credentials as environment variables. **All three are required** —
+there is no built-in default recipient:
 
 ```powershell
 $env:SENDER_EMAIL    = "your_email@gmail.com"
 $env:SENDER_PASSWORD = "your-16-char-app-password"
-$env:RECIPIENT_EMAIL = "recipient@example.com" # optional, defaults to cityrider503@gmail.com
+$env:RECIPIENT_EMAIL = "recipient@example.com"
 
 python main.py
 ```
+
+In CI these are supplied as repository secrets: `SENDER_EMAIL`, `SENDER_PASSWORD`,
+`RECIPIENT_EMAIL`.
+
+## Failure Behaviour
+
+The script exits `0` only when it genuinely did the right thing, and non-zero
+otherwise, so a failing run is visible on the Actions page instead of being
+mistaken for success.
+
+| Outcome | Exit code | Email sent |
+| --- | --- | --- |
+| Rates scraped, validated and delivered | `0` | Yes |
+| No rates published (weekend / public holiday) | `0` | No |
+| Missing or invalid `SENDER_EMAIL` / `SENDER_PASSWORD` / `RECIPIENT_EMAIL` | `1` | No |
+| A required Power BI table or iframe not found | `1` | No |
+| A parsed table is empty or outside the expected row-count band | `1` | No |
+| SMTP connection, TLS, login or send failure | `1` | No |
+
+Configuration is validated **before** scraping begins, so a run with a missing
+secret fails in under a second rather than after a minute of scraping.
+
+### Data validation
+
+After scraping, each table is checked before anything is emailed:
+
+- a record count outside the expected band (`EXPECTED_MAJOR_MIN`/`MAX` for the
+  major table, `EXPECTED_COMESA_MIN`/`MAX` for COMESA) raises an error — this is
+  the signal that the BOU page layout changed and the parser needs updating;
+- every record must carry a currency name and a positive selling rate, which
+  filters out mis-aligned rows from a layout shift;
+- a public holiday (both tables empty) is treated as a normal no-op, not a failure.
+
+Adjust the expected counts in the constants at the top of `main.py` if the bank
+legitimately changes the number of published currencies.
 
 ## License
 

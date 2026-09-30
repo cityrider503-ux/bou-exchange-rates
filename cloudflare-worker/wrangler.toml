@@ -1,0 +1,14 @@
+name = "bou-rates-trigger"
+main = "src/index.js"
+compatibility_date = "2026-09-30"
+
+# 04:30 UTC Mon-Fri = 07:30 EAT (UTC+3, no daylight saving in Uganda).
+# Cloudflare Workers cron executes on UTC and has no timezone option, so the
+# +3 offset is baked into the expression, exactly as in the GitHub workflow.
+#
+# This Worker exists because GitHub's own scheduler is best-effort on the free
+# tier: the 07:30 EAT schedule in send-rates.yml actually ran at 13:49 EAT.
+# Cloudflare fires to the minute, so the downstream job starts on time and
+# completes ~3 minutes later.
+[triggers]
+crons = ["30 4 * * 1-5"]
