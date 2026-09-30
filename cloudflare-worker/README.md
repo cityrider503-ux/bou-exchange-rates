@@ -93,6 +93,37 @@ The Worker also treats GitHub's `409` (a run already queued) as success,
 so a duplicate dispatch is harmless — the `concurrency` group in
 `send-rates.yml` prevents a second email.
 
+## Troubleshooting
+
+**No email arrived.** Check in this order:
+
+1. **Cloudflare → Workers & Pages → `bou-rates-trigger` → Observability.**
+   A failed dispatch appears there as a failed cron invocation. This is only
+   possible while `observability.enabled` is `true` in `wrangler.toml`. With
+   it off the Worker keeps no logs at all, and a failure is indistinguishable
+   from a weekend — nothing dispatched, nothing to diagnose.
+2. **The repository's Actions tab.** No `send-rates` run whatsoever means the
+   Worker never dispatched, rather than the job having run and failed.
+3. **Settings → Triggers.** Confirm the schedule is still `30 4 * * 1-5`.
+
+### Cron triggers are UTC
+
+Cloudflare cron triggers fire on **UTC** and offer no timezone option. Uganda
+is UTC+3 with no daylight saving, so `30 4 * * 1-5` is **07:30 EAT**.
+
+Typing `30 7 * * *` into the dashboard — reading it as 07:30 local time —
+schedules **10:30 EAT**, three hours late. The drift is silent: the trigger
+looks plausible in the UI and the Worker keeps firing on schedule. Change the
+schedule through `wrangler.toml` and redeploy rather than in the dashboard, so
+the repository stays the single source of truth and the two cannot drift.
+
+## `rates-watchdog.yml`
+
+Because this Worker fails quietly, a separate GitHub Actions workflow opens an
+issue if no successful dispatch ran by 09:00 EAT on a weekday. Issues notify by
+email, so the failure reaches you even though the Worker stayed silent. It uses
+the automatic `GITHUB_TOKEN` and needs no extra secrets.
+
 ## Security note
 
 `GH_TOKEN` is a real credential that can run workflows in this repository.

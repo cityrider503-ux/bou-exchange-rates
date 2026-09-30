@@ -1,0 +1,102 @@
+name: Rates watchdog
+
+# Fails the day the rates email never arrives.
+#
+# The Cloudflare Worker can only report its own failures through Worker logs,
+# which nobody is watching at 07:30. This workflow closes that gap: if no
+# successful `send-rates` dispatch exists once the morning window has passed,
+# it opens a GitHub issue. Issues notify by email, so the failure reaches you
+# even though the Worker that caused it stayed silent.
+#
+# It uses the automatic GITHUB_TOKEN, so there are no extra secrets to set up.
+
+on:
+  schedule:
+    # Hourly. Punctuality does not matter here — the job only has to notice
+    # eventually, so GitHub's best-effort scheduler is good enough.
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+concurrency:
+  group: rates-watchdog
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Alert if today's rates email was never sent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Uganda is UTC+3 with no daylight saving.
+          today_eat=$(date -u -d "+3 hours" +%Y-%m-%d)
+          hour_eat=$(date -u -d "+3 hours" +%H)
+          dow_eat=$(date -u -d "+3 hours" +%u)   # 1=Mon .. 7=Sun
+
+          echo "Checking for a successful send-rates run on ${today_eat} (${hour_eat}:00 EAT, weekday ${dow_eat})"
+
+          # The bank publishes nothing at weekends, so a missing email is
+          # expected rather than a failure.
+          if [ "$dow_eat" -ge 6 ]; then
+            echo "Weekend in Uganda — the bank publishes no rates. Nothing to check."
+            exit 0
+          fi
+
+          # Give the Worker time to fire (07:30 EAT) and the job time to finish.
+          if [ "$hour_eat" -lt 9 ]; then
+            echo "Before the 09:00 EAT deadline. Waiting."
+            exit 0
+          fi
+
+          sent=$(gh api "repos/${REPO}/actions/workflows/send-rates.yml/runs?per_page=100" \
+            --jq "[.workflow_runs[]
+                  | select(.event == \"workflow_dispatch\"
+                        and .conclusion == \"success\"
+                        and (.created_at | startswith(\"${today_eat}\")))]
+                | length")
+
+          echo "Successful dispatches today: ${sent}"
+
+          if [ "$sent" -gt 0 ]; then
+            echo "Rates email was sent. All good."
+            exit 0
+          fi
+
+          title="Rates email not sent on ${today_eat}"
+
+          # Only open one issue per day, otherwise the hourly schedule would
+          # file 15 identical reports.
+          existing=$(gh issue list --state all --limit 1 \
+            --search "${title} in:title" --json number --jq 'length')
+
+          if [ "$existing" != "0" ]; then
+            echo "Issue for ${today_eat} already exists. Not filing a duplicate."
+            exit 0
+          fi
+
+          gh issue create \
+                      --title "$title" \
+                      --body "No successful \`send-rates\` dispatch ran on ${today_eat}.
+
+          The email should have arrived around 07:33 EAT. It did not.
+
+          Check, in order:
+          1. Cloudflare Worker \`bou-rates-trigger\` → Observability, for a failed or
+             missing cron invocation.
+          2. The Actions tab for this repository, for any failed \`send-rates\` run.
+          3. That the cron trigger is still \`30 4 * * 1-5\` (04:30 UTC = 07:30 EAT) —
+             a trigger set to \`30 7 * * *\` fires at 10:30 EAT, three hours late.
+
+          Raised by \`rates-watchdog.yml\`."
+
+          echo "Opened issue: ${title}"
+          exit 1

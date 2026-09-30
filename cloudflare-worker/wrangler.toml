@@ -12,3 +12,10 @@ compatibility_date = "2026-09-30"
 # completes ~3 minutes later.
 [triggers]
 crons = ["30 4 * * 1-5"]
+
+# Without this the Worker keeps no logs at all, so a failed dispatch is
+# invisible: no GitHub run, no error, nothing to diagnose. It was off when the
+# Worker was first deployed, which is why a missing cron went unnoticed.
+# Raise head_sampling_rate above 1 only if you need more than every invocation.
+[observability]
+enabled = true

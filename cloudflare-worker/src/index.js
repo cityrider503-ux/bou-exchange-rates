@@ -11,6 +11,12 @@
  * still happens in GitHub Actions, so the existing repo secrets are used and
  * nothing sensitive lives in this Worker.
  *
+  * Failures throw rather than return quietly. A silent failure here is
+  * indistinguishable from a weekend: no dispatch, no GitHub run, no email, and
+  * nothing in the dashboard to explain it. A rejected cron invocation shows up
+  * as a failed Worker log instead. The `observability` block in wrangler.toml
+  * must stay enabled for those logs to be retained.
+  *
  * Setup:
  *   1. npx wrangler secret put GH_TOKEN     # fine-grained PAT, Actions:write
  *   2. npx wrangler deploy
@@ -37,8 +43,9 @@ export default {
 
 async function dispatch(env, scheduledTime) {
 	if (!env.GH_TOKEN) {
-		console.error("GH_TOKEN is not set. Add it with: wrangler secret put GH_TOKEN");
-		return;
+		throw new Error(
+			"GH_TOKEN is not set. Add it with: wrangler secret put GH_TOKEN",
+		);
 	}
 
 	// Cloudflare cron executes on UTC; Uganda is UTC+3 with no daylight saving.
@@ -72,7 +79,7 @@ async function dispatch(env, scheduledTime) {
 	}
 
 	const body = await response.text().catch(() => "");
-	console.error(
+	throw new Error(
 		`Dispatch failed: HTTP ${response.status} ${response.statusText} ${body.slice(0, 300)}`,
 	);
 }
