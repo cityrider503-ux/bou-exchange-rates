@@ -30,6 +30,12 @@ jobs:
     timeout-minutes: 5
 
     steps:
+      # `gh issue list` resolves the repository from the working directory and
+      # aborts with "fatal: not a git repository" when there is none, which
+      # made every run die before it could file an issue.
+      - name: Check out repository
+        uses: actions/checkout@v4
+
       - name: Alert if today's rates email was never sent
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -74,8 +80,9 @@ jobs:
           title="Rates email not sent on ${today_eat}"
 
           # Only open one issue per day, otherwise the hourly schedule would
-          # file 15 identical reports.
-          existing=$(gh issue list --state all --limit 1 \
+          # file 15 identical reports. --repo keeps this independent of the
+          # working directory.
+          existing=$(gh issue list --repo "$REPO" --state all --limit 1 \
             --search "${title} in:title" --json number --jq 'length')
 
           if [ "$existing" != "0" ]; then
@@ -83,20 +90,21 @@ jobs:
             exit 0
           fi
 
-          gh issue create \
-                      --title "$title" \
-                      --body "No successful \`send-rates\` dispatch ran on ${today_eat}.
-
+          body=$(cat <<EOF
+          No successful \`send-rates\` dispatch ran on ${today_eat}.
+          
           The email should have arrived around 07:33 EAT. It did not.
-
+          
           Check, in order:
-          1. Cloudflare Worker \`bou-rates-trigger\` → Observability, for a failed or
-             missing cron invocation.
+          1. Cloudflare Worker \`bou-rates-trigger\` → Observability, for a failed or missing cron invocation.
           2. The Actions tab for this repository, for any failed \`send-rates\` run.
-          3. That the cron trigger is still \`30 4 * * 1-5\` (04:30 UTC = 07:30 EAT) —
-             a trigger set to \`30 7 * * *\` fires at 10:30 EAT, three hours late.
+          3. That the cron trigger is still \`30 4 * * 1-5\` (04:30 UTC = 07:30 EAT) — a trigger set to \`30 7 * * *\` fires at 10:30 EAT, three hours late.
+          
+          Raised by \`rates-watchdog.yml\`.
+          EOF
+          )
 
-          Raised by \`rates-watchdog.yml\`."
+          gh issue create --repo "$REPO" --title "$title" --body "$body"
 
           echo "Opened issue: ${title}"
           exit 1
