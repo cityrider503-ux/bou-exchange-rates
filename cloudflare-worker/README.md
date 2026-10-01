@@ -93,6 +93,18 @@ The Worker also treats GitHub's `409` (a run already queued) as success,
 so a duplicate dispatch is harmless — the `concurrency` group in
 `send-rates.yml` prevents a second email.
 
+### Retries
+
+One cron fire is the only thing standing between the bank publishing rates and
+the email arriving, so the dispatch retries up to 4 times with exponential
+backoff (1s, 2s, 4s) on network errors and on HTTP 408, 429, 500, 502, 503 and
+504. That is still well inside the 15-minute cron wall-time limit.
+
+A 4xx response is **not** retried — the request itself is wrong (a bad or
+expired `GH_TOKEN`, a missing workflow), and retrying would only burn the
+invocation. The final failure throws either way, so it shows up as a failed
+Worker log rather than silence.
+
 ## Troubleshooting
 
 **No email arrived.** Check in this order:
