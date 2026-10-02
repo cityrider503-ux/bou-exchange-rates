@@ -129,12 +129,23 @@ Worker log rather than silence.
    from a weekend — nothing dispatched, nothing to diagnose.
 2. **The repository's Actions tab.** No `send-rates` run whatsoever means the
    Worker never dispatched, rather than the job having run and failed.
-3. **Settings → Triggers.** Confirm the schedule is still `30 4 * * 1-5`.
+3. **Settings → Triggers.** Confirm the schedule is still `30 4 * * mon-fri`.
+
+### Weekdays are not portable between the two schedulers
+
+Cloudflare numbers days of the week **1 = Sunday to 7 = Saturday**. GitHub
+Actions and most cron implementations use **1 = Monday**. So `1-5` means
+Sunday–Thursday on Cloudflare and Monday–Friday on GitHub — the same
+expression silently means two different things.
+
+That is why the Worker uses `mon-fri` and GitHub's cron in `send-rates.yml`
+keeps `1-5`. Both are correct *for their own system*. Prefer the names
+wherever a schedule is read by more than one scheduler.
 
 ### Cron triggers are UTC
 
 Cloudflare cron triggers fire on **UTC** and offer no timezone option. Uganda
-is UTC+3 with no daylight saving, so `30 4 * * 1-5` is **07:30 EAT**.
+is UTC+3 with no daylight saving, so `30 4 * * mon-fri` is **07:30 EAT**.
 
 Typing `30 7 * * *` into the dashboard — reading it as 07:30 local time —
 schedules **10:30 EAT**, three hours late. The drift is silent: the trigger

@@ -10,8 +10,14 @@ compatibility_date = "2026-09-30"
 # tier: the 07:30 EAT schedule in send-rates.yml actually ran at 13:49 EAT.
 # Cloudflare fires to the minute, so the downstream job starts on time and
 # completes ~3 minutes later.
+#
+# Weekdays are written as `mon-fri` rather than `1-5` on purpose. Cloudflare
+# numbers days 1=Sunday to 7=Saturday, unlike the 1=Monday convention used by
+# GitHub Actions and most cron implementations, so `1-5` here means Sunday to
+# Thursday and would silently skip every Friday. The names are unambiguous on
+# both systems. GitHub's own cron in send-rates.yml legitimately keeps `1-5`.
 [triggers]
-crons = ["30 4 * * 1-5"]
+crons = ["30 4 * * mon-fri"]
 
 # Without this the Worker keeps no logs at all, so a failed dispatch is
 # invisible: no GitHub run, no error, nothing to diagnose. It was off when the
