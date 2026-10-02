@@ -2,16 +2,29 @@
 
 A tiny Cloudflare Worker that fires the
 [`send-rates.yml`](../.github/workflows/send-rates.yml) GitHub Actions
-workflow at **07:30 EAT every weekday**, replacing the unreliable
-`cron:` trigger in that same file.
+workflow at **07:30 EAT every weekday**.
 
-## Why
+## Status: trigger registered, but not firing
+
+The Worker is deployed and its cron trigger is registered as `30 4 * * 1-5`,
+but **no cron invocation has been observed**. Two weekday slots passed with no
+dispatch, and a throwaway control Worker on `* * * * *` also never fired, which
+points at this Cloudflare account rather than at this repository.
+
+Until that is resolved, `send-rates.yml` keeps its own `cron:` as the working
+scheduler. The email may therefore arrive hours late — but it arrives. Because
+both schedulers can be live at once, that workflow now skips the send if a
+successful run already happened that day, so the two cannot double-email.
+
+Restore the Worker as the primary once its cron executes.
+
+## Why this exists
 
 GitHub Actions schedules are best-effort. Measured delays on this repo
 (free tier) ranged from **2h55m to 6h19m** — a 07:30 EAT schedule
 actually executed at 13:49 EAT. That misses an 08:00 deadline.
 
-Cloudflare Workers cron fires reliably to the minute. The Worker only
+Cloudflare Workers cron is meant to fire reliably to the minute. The Worker only
 *sends the signal*; the scraping and emailing still happen in GitHub
 Actions, so the existing repository secrets are used unchanged and no
 new secret is introduced into the scrape path.

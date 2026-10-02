@@ -1,21 +1,31 @@
 name: Send BOU exchange rates
 
 on:
-  # No `cron:` here on purpose. GitHub's scheduler is best-effort and this
-  # repo measured 2h50m-6h19m late on the free tier, so it cannot meet the
-  # 08:00 posting deadline. Scheduling now lives in the Cloudflare Worker
-  # (cloudflare-worker/), which fires workflow_dispatch at 04:30 UTC = 07:30
-  # EAT Mon-Fri and lands the email around 07:32.
+  # GitHub's scheduler is best-effort and this repo has measured 2h50m-6h19m
+  # late on the free tier, so this cannot reliably hit 07:30 EAT. It is
+  # restored anyway: a late email is worth far more than none, and it is the
+  # only scheduler currently known to actually execute.
   #
-  # Keeping both would send two emails every weekday: one punctual from the
-  # Worker, one hours later from GitHub's cron.
+  # The Cloudflare Worker (cloudflare-worker/) is meant to be the punctual
+  # path, dispatching this same workflow at 04:30 UTC = 07:30 EAT. Its cron
+  # trigger is registered but has never executed, so this cron carries the
+  # schedule until that is resolved.
+  #
+  # Because both can be live at once, the "skip if already sent" step below
+  # makes the run idempotent: whichever fires first sends, and any later run
+  # on the same EAT day exits cleanly. That keeps the eventual switch back to
+  # the Worker free of duplicate emails.
+  schedule:
+    # 04:30 UTC = 07:30 EAT. GitHub starts this whenever it gets to it.
+    - cron: "30 4 * * 1-5"
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
-# Prevent a manual dispatch from overlapping the scheduled run and mailing the
-# same rates twice.
+# Stop a dispatch from overlapping the scheduled run mid-send. Queued, not
+# cancelled, so a rate email is never half-finished by a second trigger.
 concurrency:
   group: send-rates
   cancel-in-progress: false
@@ -29,19 +39,60 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      - name: Check whether today rates were already sent
+        id: dedupe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          today_eat=$(date -u -d "+3 hours" +%Y-%m-%d)
+          dow_eat=$(date -u -d "+3 hours" +%u)
+
+          # The bank publishes nothing at weekends, so there is nothing to duplicate.
+          if [ "$dow_eat" -ge 6 ]; then
+            echo "Weekend - the bank publishes no rates. Nothing to send."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          already_sent=$(gh api "repos/${REPO}/actions/workflows/send-rates.yml/runs?per_page=100" \
+            --jq "[.workflow_runs[]
+                  | select(.status == \"completed\"
+                        and .conclusion == \"success\"
+                        and (.id | tonumber) != ${RUN_ID}
+                        and (.created_at | startswith(\"${today_eat}\")))]
+                | length")
+
+          echo "Successful send-rates runs already completed on ${today_eat} EAT: ${already_sent}"
+
+          if [ "$already_sent" -gt 0 ]; then
+            echo "Today rates were already emailed. Skipping to avoid a duplicate."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No earlier successful run today. This run will send."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Set up Python
+        if: steps.dedupe.outputs.skip != 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
 
       - name: Install Python dependencies
+        if: steps.dedupe.outputs.skip != 'true'
         run: python -m pip install -r requirements.txt
 
       - name: Install Playwright Chromium
+        if: steps.dedupe.outputs.skip != 'true'
         run: python -m playwright install --with-deps chromium
 
       - name: Fetch rates and send email
+        if: steps.dedupe.outputs.skip != 'true'
         env:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
