@@ -52,15 +52,16 @@ jobs:
                       and (.created_at | startswith($today)))]
             | length' <<<"$runs_json")
 
-          dispatch_today=$(jq -r --arg today "$today_eat" \
+          cloudflare_dispatch_today=$(jq -r --arg today "$today_eat" \
             '[.workflow_runs[]
               | select(.event == "workflow_dispatch"
+                      and ((.display_title // "") | endswith("(cloudflare-cron)"))
                       and (.created_at | startswith($today)))]
             | length' <<<"$runs_json")
 
           echo "successful_today=${successful_today}"
           echo "inflight_today=${inflight_today}"
-          echo "dispatch_today=${dispatch_today}"
+          echo "cloudflare_dispatch_today=${cloudflare_dispatch_today}"
 
           if [ "$successful_today" -gt 0 ]; then
             echo "A successful send-rates run already exists today."
@@ -73,18 +74,21 @@ jobs:
           fi
 
           echo "No successful or in-flight run today. Dispatching rescue run."
+          now_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           gh api --method POST "repos/${REPO}/actions/workflows/send-rates.yml/dispatches" \
-            -f ref=main
+            -f ref=main \
+            -f inputs[trigger_source]=github-backstop \
+            -f inputs[trigger_scheduled_time_utc]="$now_utc"
 
           # Open one issue per day when Cloudflare missed the morning dispatch.
-          if [ "$dispatch_today" -eq 0 ]; then
+          if [ "$cloudflare_dispatch_today" -eq 0 ]; then
             title="Cloudflare cron missed send-rates dispatch on ${today_eat}"
             existing=$(gh issue list --repo "$REPO" --state all --limit 1 \
               --search "${title} in:title" --json number --jq 'length')
 
             if [ "$existing" = "0" ]; then
               body=$(cat <<EOF
-              No \`workflow_dispatch\` run of \`send-rates.yml\` was detected on ${today_eat} by 08:15 EAT.
+              No \`Send BOU exchange rates (cloudflare-cron)\` run was detected on ${today_eat} by 08:15 EAT.
 
               The backstop workflow dispatched \`send-rates.yml\` to keep delivery on time.
 

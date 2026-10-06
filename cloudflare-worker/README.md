@@ -13,7 +13,11 @@ To prevent missed mornings while Cloudflare reliability is being verified, the
 repository now includes `.github/workflows/cloudflare-dispatch-backstop.yml`.
 At 08:15 EAT on weekdays, it checks whether `send-rates.yml` has already run
 successfully; if not, it dispatches a rescue run and opens one issue for the
-day when no earlier `workflow_dispatch` was seen.
+day when no earlier Cloudflare-triggered dispatch was seen.
+
+To make Cloudflare activity explicit, Worker-triggered dispatches now set
+`trigger_source=cloudflare-cron`, which appears in the run title as
+`Send BOU exchange rates (cloudflare-cron)`.
 
 `send-rates.yml` still keeps its own `cron:` as a fallback scheduler. Because
 both schedulers can be live at once, that workflow skips the send if a
@@ -81,7 +85,14 @@ Or check the real schedule: **Workers & Pages** → your Worker →
 **Settings** → **Triggers** → **View events**. The last 100 invocations
 are logged there, and a `Dispatch accepted (204)` line means it worked.
 
-Watch for the resulting run under the repository's **Actions** tab.
+Watch for the resulting run under the repository's **Actions** tab. A healthy
+Cloudflare fire appears as:
+
+- `Send BOU exchange rates (cloudflare-cron)`
+
+If backstop had to rescue, the run title shows:
+
+- `Send BOU exchange rates (github-backstop)`
 
 ## Branch targeted
 
@@ -168,8 +179,9 @@ This workflow runs at 08:15 EAT on weekdays. If no successful or in-progress
 `send-rates` run exists yet, it dispatches `send-rates.yml` directly through the
 GitHub API so the email still goes out the same morning.
 
-When it has to rescue and no prior `workflow_dispatch` run exists for that day,
-it opens one issue pointing back to the Worker trigger and logs for debugging.
+When it has to rescue and no prior
+`Send BOU exchange rates (cloudflare-cron)` run exists for that day, it opens
+one issue pointing back to the Worker trigger and logs for debugging.
 
 ## Security note
 

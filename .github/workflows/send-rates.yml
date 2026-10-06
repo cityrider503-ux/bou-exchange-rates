@@ -1,4 +1,5 @@
 name: Send BOU exchange rates
+run-name: Send BOU exchange rates${{ github.event_name == 'workflow_dispatch' && format(' ({0})', inputs.trigger_source) || '' }}
 
 on:
   # GitHub's scheduler is best-effort and this repo has measured 2h50m-6h19m
@@ -19,6 +20,15 @@ on:
     # 04:30 UTC = 07:30 EAT. GitHub starts this whenever it gets to it.
     - cron: "30 4 * * 1-5"
   workflow_dispatch:
+    inputs:
+      trigger_source:
+        description: Source of this dispatch signal
+        required: false
+        default: manual-dispatch
+      trigger_scheduled_time_utc:
+        description: Scheduled UTC timestamp from upstream trigger
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -38,6 +48,16 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Log trigger source
+        env:
+          TRIGGER_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger_source || 'github-schedule' }}
+          TRIGGER_SCHEDULED_TIME_UTC: ${{ github.event_name == 'workflow_dispatch' && inputs.trigger_scheduled_time_utc || '' }}
+        run: |
+          echo "Trigger source: ${TRIGGER_SOURCE}"
+          if [ -n "${TRIGGER_SCHEDULED_TIME_UTC}" ]; then
+            echo "Upstream scheduled time (UTC): ${TRIGGER_SCHEDULED_TIME_UTC}"
+          fi
 
       - name: Check whether today rates were already sent
         id: dedupe
