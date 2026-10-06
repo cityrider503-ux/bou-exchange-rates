@@ -4,19 +4,20 @@ A tiny Cloudflare Worker that fires the
 [`send-rates.yml`](../.github/workflows/send-rates.yml) GitHub Actions
 workflow at **07:30 EAT every weekday**.
 
-## Status: trigger registered, but not firing
+## Status: trigger registered, with GitHub backstop active
 
-The Worker is deployed and its cron trigger is registered as `30 4 * * 1-5`,
-but **no cron invocation has been observed**. Two weekday slots passed with no
-dispatch, and a throwaway control Worker on `* * * * *` also never fired, which
-points at this Cloudflare account rather than at this repository.
+The Worker is deployed and its cron trigger is registered as
+`30 4 * * mon-fri`.
 
-Until that is resolved, `send-rates.yml` keeps its own `cron:` as the working
-scheduler. The email may therefore arrive hours late — but it arrives. Because
-both schedulers can be live at once, that workflow now skips the send if a
-successful run already happened that day, so the two cannot double-email.
+To prevent missed mornings while Cloudflare reliability is being verified, the
+repository now includes `.github/workflows/cloudflare-dispatch-backstop.yml`.
+At 08:15 EAT on weekdays, it checks whether `send-rates.yml` has already run
+successfully; if not, it dispatches a rescue run and opens one issue for the
+day when no earlier `workflow_dispatch` was seen.
 
-Restore the Worker as the primary once its cron executes.
+`send-rates.yml` still keeps its own `cron:` as a fallback scheduler. Because
+both schedulers can be live at once, that workflow skips the send if a
+successful run already happened that day, so the paths cannot double-email.
 
 ## Why this exists
 
@@ -160,6 +161,15 @@ issue if no successful `send-rates` run finished by 15:00 EAT on a weekday.
 That later deadline accounts for GitHub's occasionally late scheduler while
 still flagging a genuinely missing email the same day. It uses the automatic
 `GITHUB_TOKEN` and needs no extra secrets.
+
+## `cloudflare-dispatch-backstop.yml`
+
+This workflow runs at 08:15 EAT on weekdays. If no successful or in-progress
+`send-rates` run exists yet, it dispatches `send-rates.yml` directly through the
+GitHub API so the email still goes out the same morning.
+
+When it has to rescue and no prior `workflow_dispatch` run exists for that day,
+it opens one issue pointing back to the Worker trigger and logs for debugging.
 
 ## Security note
 
