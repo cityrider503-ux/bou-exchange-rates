@@ -4,7 +4,7 @@ name: Rates watchdog
 #
 # The Cloudflare Worker can only report its own failures through Worker logs,
 # which nobody is watching at 07:30. This workflow closes that gap: if no
-# successful `send-rates` dispatch exists once the morning window has passed,
+# successful `send-rates` run exists once the fallback-delay window has passed,
 # it opens a GitHub issue. Issues notify by email, so the failure reaches you
 # even though the Worker that caused it stayed silent.
 #
@@ -57,20 +57,20 @@ jobs:
             exit 0
           fi
 
-          # Give the Worker time to fire (07:30 EAT) and the job time to finish.
-          if [ "$hour_eat" -lt 9 ]; then
-            echo "Before the 09:00 EAT deadline. Waiting."
+          # Give the 07:30 EAT trigger enough time to complete even when GitHub
+          # schedule start is several hours late.
+          if [ "$hour_eat" -lt 15 ]; then
+            echo "Before the 15:00 EAT deadline. Waiting."
             exit 0
           fi
 
           sent=$(gh api "repos/${REPO}/actions/workflows/send-rates.yml/runs?per_page=100" \
             --jq "[.workflow_runs[]
-                  | select(.event == \"workflow_dispatch\"
-                        and .conclusion == \"success\"
+                  | select(.conclusion == \"success\"
                         and (.created_at | startswith(\"${today_eat}\")))]
                 | length")
 
-          echo "Successful dispatches today: ${sent}"
+          echo "Successful send-rates runs today: ${sent}"
 
           if [ "$sent" -gt 0 ]; then
             echo "Rates email was sent. All good."
@@ -91,7 +91,7 @@ jobs:
           fi
 
           body=$(cat <<EOF
-          No successful \`send-rates\` dispatch ran on ${today_eat}.
+          No successful \`send-rates\` run finished on ${today_eat}.
           
           The email should have arrived around 07:33 EAT. It did not.
           

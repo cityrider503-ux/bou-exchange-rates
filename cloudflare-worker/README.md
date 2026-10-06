@@ -156,9 +156,10 @@ the repository stays the single source of truth and the two cannot drift.
 ## `rates-watchdog.yml`
 
 Because this Worker fails quietly, a separate GitHub Actions workflow opens an
-issue if no successful dispatch ran by 09:00 EAT on a weekday. Issues notify by
-email, so the failure reaches you even though the Worker stayed silent. It uses
-the automatic `GITHUB_TOKEN` and needs no extra secrets.
+issue if no successful `send-rates` run finished by 15:00 EAT on a weekday.
+That later deadline accounts for GitHub's occasionally late scheduler while
+still flagging a genuinely missing email the same day. It uses the automatic
+`GITHUB_TOKEN` and needs no extra secrets.
 
 ## Security note
 
