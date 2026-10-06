@@ -11,12 +11,12 @@
  * still happens in GitHub Actions, so the existing repo secrets are used and
  * nothing sensitive lives in this Worker.
  *
-  * Failures throw rather than return quietly. A silent failure here is
-  * indistinguishable from a weekend: no dispatch, no GitHub run, no email, and
-  * nothing in the dashboard to explain it. A rejected cron invocation shows up
-  * as a failed Worker log instead. The `observability` block in wrangler.toml
-  * must stay enabled for those logs to be retained.
-  *
+ * Failures throw rather than return quietly. A silent failure here is
+ * indistinguishable from a weekend: no dispatch, no GitHub run, no email, and
+ * nothing in the dashboard to explain it. A rejected cron invocation shows up
+ * as a failed Worker log instead. The `observability` block in wrangler.toml
+ * must stay enabled for those logs to be retained.
+ *
  * Setup:
  *   1. npx wrangler secret put GH_TOKEN     # fine-grained PAT, Actions:write
  *   2. npx wrangler deploy
@@ -63,9 +63,10 @@ async function dispatch(env, scheduledTime) {
 	console.log(`BOU dispatch: firing for ${formatEastAfricaTime(scheduledTime)}`);
 
 	const url = `https://api.github.com/repos/${REPO}/actions/workflows/${WORKFLOW}/dispatches`;
+	const scheduledAtUtc = new Date(scheduledTime).toISOString();
 
 	for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-		const outcome = await attemptDispatch(url, env);
+		const outcome = await attemptDispatch(url, env, scheduledAtUtc);
 
 		if (outcome.ok) {
 			console.log(`Dispatch accepted on attempt ${attempt} (${outcome.detail})`);
@@ -94,19 +95,25 @@ async function dispatch(env, scheduledTime) {
 	}
 }
 
-async function attemptDispatch(url, env) {
+async function attemptDispatch(url, env, scheduledAtUtc) {
 	let response;
 	try {
 		response = await fetch(url, {
 			method: "POST",
 			headers: {
-				Authorization: `Bearer ${env.GH_TOKEN}`,
+				Authorization: "Bearer ".concat(env.GH_TOKEN),
 				Accept: "application/vnd.github+json",
 				"X-GitHub-Api-Version": "2022-11-28",
 				"Content-Type": "application/json",
 				"User-Agent": "bou-rates-cron-worker",
 			},
-			body: JSON.stringify({ ref: REF }),
+			body: JSON.stringify({
+				ref: REF,
+				inputs: {
+					trigger_source: "cloudflare-cron",
+					trigger_scheduled_time_utc: scheduledAtUtc,
+				},
+			}),
 		});
 	} catch (err) {
 		// A dropped or refused connection is worth another go.
